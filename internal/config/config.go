@@ -7,10 +7,10 @@ import (
 
 // Config holds all runtime configuration for a mrfload run.
 type Config struct {
-	DSN             string
-	FilePath        string
-	HospitalName    string
-	LogFormat       string // "text" or "json"
+	DSN                string
+	FilePath           string
+	HospitalName       string
+	LogFormat          string // "text" or "json"
 	ActivateVersion    bool
 	Force              bool
 	KeepStaging        bool
@@ -35,7 +35,7 @@ func (c *Config) ValidateWithDSN() error {
 		return err
 	}
 	if c.DSN == "" {
-		return fmt.Errorf("--dsn or SUPABASE_DB_URL is required")
+		return fmt.Errorf("--dsn or DATABASE_URL is required")
 	}
 	return nil
 }

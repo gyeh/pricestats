@@ -1,8 +1,6 @@
 package normalize
 
 import (
-	"fmt"
-
 	"github.com/google/uuid"
 
 	"github.com/gyeh/pricestats/internal/model"
@@ -11,10 +9,6 @@ import (
 // ToStagingRow converts a Parquet-read HospitalChargeRow into a normalized StagingRow.
 // When includePayerPrices is false, payer/plan names and negotiated price fields are nulled out.
 func ToStagingRow(row *model.HospitalChargeRow, batchID uuid.UUID, mRFFileID int64, rowNum int64, includePayerPrices bool) (*model.StagingRow, error) {
-	if row.Description == "" {
-		return nil, fmt.Errorf("row %d: description is required", rowNum)
-	}
-
 	s := &model.StagingRow{
 		IngestBatchID:   batchID,
 		MRFFileID:       mRFFileID,

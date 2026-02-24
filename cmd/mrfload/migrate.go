@@ -26,7 +26,7 @@ func runMigrate(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	if cfg.DSN == "" {
-		log.Error().Msg("--dsn or SUPABASE_DB_URL is required")
+		log.Error().Msg("--dsn or DATABASE_URL is required")
 		os.Exit(exitcode.UsageError)
 	}
 
