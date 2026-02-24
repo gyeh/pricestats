@@ -5,17 +5,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
-	embedsql "github.com/gyeh/pricestats/internal/sql"
+	"github.com/gyeh/pricestats/internal/sqlcgen"
 )
 
 // Cleanup deletes staging rows for the given batch.
-func Cleanup(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, batchID uuid.UUID) error {
+func Cleanup(ctx context.Context, q *sqlcgen.Queries, log zerolog.Logger, batchID uuid.UUID) error {
 	start := time.Now()
 
-	tag, err := pool.Exec(ctx, embedsql.DeleteStagingBatch, batchID)
+	tag, err := q.DeleteStagingBatch(ctx, batchID)
 	if err != nil {
 		return err
 	}

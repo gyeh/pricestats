@@ -6,7 +6,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -112,22 +111,4 @@ func Stage(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, pf *Pref
 		RowsRejected: rowsRejected,
 		Duration:     dur,
 	}, nil
-}
-
-// UpdateStatus updates the mrf_file status.
-func UpdateStatus(ctx context.Context, pool *pgxpool.Pool, mRFFileID int64, status string) error {
-	_, err := pool.Exec(ctx,
-		"UPDATE ingest.mrf_files SET status = $2 WHERE mrf_file_id = $1",
-		mRFFileID, status,
-	)
-	return err
-}
-
-// DeleteStagingBatch deletes staging rows for a specific batch (cleanup failed runs).
-func DeleteStagingBatch(ctx context.Context, pool *pgxpool.Pool, batchID uuid.UUID) error {
-	_, err := pool.Exec(ctx,
-		"DELETE FROM ingest.stage_charge_rows WHERE ingest_batch_id = $1",
-		batchID,
-	)
-	return err
 }

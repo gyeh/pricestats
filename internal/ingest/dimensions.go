@@ -6,25 +6,24 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
-	embedsql "github.com/gyeh/pricestats/internal/sql"
+	"github.com/gyeh/pricestats/internal/sqlcgen"
 )
 
 // UpsertDimensions upserts payers and plans from the staging batch into ref tables.
-func UpsertDimensions(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, batchID uuid.UUID) error {
+func UpsertDimensions(ctx context.Context, q *sqlcgen.Queries, log zerolog.Logger, batchID uuid.UUID) error {
 	start := time.Now()
 
 	// Upsert payers
-	tag, err := pool.Exec(ctx, embedsql.UpsertPayers, batchID)
+	tag, err := q.UpsertPayers(ctx, batchID)
 	if err != nil {
 		return fmt.Errorf("upsert payers: %w", err)
 	}
 	log.Info().Int64("payers_upserted", tag.RowsAffected()).Msg("payers upserted")
 
 	// Upsert plans
-	tag, err = pool.Exec(ctx, embedsql.UpsertPlans, batchID)
+	tag, err = q.UpsertPlans(ctx, batchID)
 	if err != nil {
 		return fmt.Errorf("upsert plans: %w", err)
 	}

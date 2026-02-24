@@ -12,19 +12,18 @@ import (
 
 	"github.com/gyeh/pricestats/internal/db"
 	"github.com/gyeh/pricestats/internal/model"
-	embedsql "github.com/gyeh/pricestats/internal/sql"
+	"github.com/gyeh/pricestats/internal/sqlcgen"
 )
 
 // ---------- helpers ----------
 
 // insertHospital is a test helper that inserts a hospital and returns its ID.
-func insertHospital(t *testing.T, pool *pgxpool.Pool, name string) int64 {
+func insertHospital(t *testing.T, q *sqlcgen.Queries, name string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	var id int64
-	err := pool.QueryRow(ctx, embedsql.ResolveHospital,
-		name, nil, nil, nil, nil,
-	).Scan(&id)
+	id, err := q.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+		HospitalName: name,
+	})
 	if err != nil {
 		t.Fatalf("insert hospital %q: %v", name, err)
 	}
@@ -32,18 +31,22 @@ func insertHospital(t *testing.T, pool *pgxpool.Pool, name string) int64 {
 }
 
 // insertMRFFile is a test helper that registers an MRF file and returns its ID.
-func insertMRFFile(t *testing.T, pool *pgxpool.Pool, hospitalID int64, sha string) int64 {
+func insertMRFFile(t *testing.T, q *sqlcgen.Queries, hospitalID int64, sha string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	var id int64
-	var status string
-	err := pool.QueryRow(ctx, embedsql.RegisterMRFFile,
-		hospitalID, "test.parquet", sha, nil, nil, true, int64(1000),
-	).Scan(&id, &status)
+	affirmation := true
+	fileSize := int64(1000)
+	result, err := q.RegisterMRFFile(ctx, sqlcgen.RegisterMRFFileParams{
+		HospitalID:       hospitalID,
+		SourceFileName:   "test.parquet",
+		SourceFileSha256: sha,
+		Affirmation:      &affirmation,
+		FileSizeBytes:    &fileSize,
+	})
 	if err != nil {
 		t.Fatalf("insert mrf_file sha=%s: %v", sha, err)
 	}
-	return id
+	return result.MrfFileID
 }
 
 // insertStagingRow inserts a single staging row via COPY for test setup.
@@ -85,6 +88,7 @@ func makeStagingRow(batchID uuid.UUID, mrfFileID int64, rowNum int64, opts ...fu
 func strPtr(s string) *string   { return &s }
 func int64Ptr(v int64) *int64   { return &v }
 func int32Ptr(v int32) *int32   { return &v }
+func boolPtr(v bool) *bool      { return &v }
 
 // ---------- Migration tests ----------
 
@@ -139,13 +143,17 @@ func TestMigrations_PartitionsExist(t *testing.T) {
 
 func TestResolveHospital(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
 	t.Run("insert_new", func(t *testing.T) {
-		var id int64
-		err := pool.QueryRow(ctx, embedsql.ResolveHospital,
-			"General Hospital", "New York", "123 Main St", "LIC-001", "NY",
-		).Scan(&id)
+		id, err := q.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+			HospitalName:     "General Hospital",
+			HospitalLocation: strPtr("New York"),
+			HospitalAddress:  strPtr("123 Main St"),
+			LicenseNumber:    strPtr("LIC-001"),
+			LicenseState:     strPtr("NY"),
+		})
 		if err != nil {
 			t.Fatalf("insert: %v", err)
 		}
@@ -169,8 +177,8 @@ func TestResolveHospital(t *testing.T) {
 	t.Run("duplicate_name_inserts_again", func(t *testing.T) {
 		// No unique constraint on hospital_name, so same name creates a new row.
 		// Dedup is handled in Go layer via SELECT lookup before insert.
-		id1 := insertHospital(t, pool, "Dupe Hospital")
-		id2 := insertHospital(t, pool, "Dupe Hospital")
+		id1 := insertHospital(t, q, "Dupe Hospital")
+		id2 := insertHospital(t, q, "Dupe Hospital")
 		if id1 == id2 {
 			t.Errorf("expected different IDs for duplicate names, got same: %d", id1)
 		}
@@ -178,12 +186,9 @@ func TestResolveHospital(t *testing.T) {
 
 	t.Run("go_layer_dedup_by_name_lookup", func(t *testing.T) {
 		// The actual dedup is a SELECT by name before the INSERT (as in preflight.go)
-		insertHospital(t, pool, "Lookup Hospital")
+		insertHospital(t, q, "Lookup Hospital")
 
-		var id int64
-		err := pool.QueryRow(ctx,
-			"SELECT hospital_id FROM ref.hospitals WHERE hospital_name = $1 LIMIT 1",
-			"Lookup Hospital").Scan(&id)
+		id, err := q.LookupHospitalByName(ctx, "Lookup Hospital")
 		if err != nil {
 			t.Fatalf("lookup: %v", err)
 		}
@@ -193,10 +198,9 @@ func TestResolveHospital(t *testing.T) {
 	})
 
 	t.Run("null_optional_fields", func(t *testing.T) {
-		var id int64
-		err := pool.QueryRow(ctx, embedsql.ResolveHospital,
-			"Minimal Hospital", nil, nil, nil, nil,
-		).Scan(&id)
+		id, err := q.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+			HospitalName: "Minimal Hospital",
+		})
 		if err != nil {
 			t.Fatalf("insert with nulls: %v", err)
 		}
@@ -210,45 +214,51 @@ func TestResolveHospital(t *testing.T) {
 
 func TestRegisterMRFFile(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Test Hospital")
+	hospitalID := insertHospital(t, q, "Test Hospital")
 
 	t.Run("insert_new", func(t *testing.T) {
-		var id int64
-		var status string
-		err := pool.QueryRow(ctx, embedsql.RegisterMRFFile,
-			hospitalID, "file1.parquet", "sha256-aaa", "v1.0", nil, true, int64(5000),
-		).Scan(&id, &status)
+		result, err := q.RegisterMRFFile(ctx, sqlcgen.RegisterMRFFileParams{
+			HospitalID:       hospitalID,
+			SourceFileName:   "file1.parquet",
+			SourceFileSha256: "sha256-aaa",
+			Version:          strPtr("v1.0"),
+			Affirmation:      boolPtr(true),
+			FileSizeBytes:    int64Ptr(5000),
+		})
 		if err != nil {
 			t.Fatalf("register: %v", err)
 		}
-		if id <= 0 {
-			t.Errorf("expected positive mrf_file_id, got %d", id)
+		if result.MrfFileID <= 0 {
+			t.Errorf("expected positive mrf_file_id, got %d", result.MrfFileID)
 		}
-		if status != "pending" {
-			t.Errorf("expected status 'pending', got %q", status)
+		if result.Status != "pending" {
+			t.Errorf("expected status 'pending', got %q", result.Status)
 		}
 	})
 
 	t.Run("duplicate_sha_returns_no_rows", func(t *testing.T) {
 		// First insert
-		insertMRFFile(t, pool, hospitalID, "sha256-bbb")
+		insertMRFFile(t, q, hospitalID, "sha256-bbb")
 
 		// Second insert with same hospital + sha → conflict, no RETURNING
-		var id int64
-		var status string
-		err := pool.QueryRow(ctx, embedsql.RegisterMRFFile,
-			hospitalID, "file.parquet", "sha256-bbb", nil, nil, true, int64(1000),
-		).Scan(&id, &status)
+		_, err := q.RegisterMRFFile(ctx, sqlcgen.RegisterMRFFileParams{
+			HospitalID:       hospitalID,
+			SourceFileName:   "file.parquet",
+			SourceFileSha256: "sha256-bbb",
+			Affirmation:      boolPtr(true),
+			FileSizeBytes:    int64Ptr(1000),
+		})
 		if err != pgx.ErrNoRows {
 			t.Fatalf("expected ErrNoRows on duplicate sha, got err=%v", err)
 		}
 	})
 
 	t.Run("different_hospital_same_sha_ok", func(t *testing.T) {
-		otherHospital := insertHospital(t, pool, "Other Hospital")
-		id := insertMRFFile(t, pool, otherHospital, "sha256-ccc")
+		otherHospital := insertHospital(t, q, "Other Hospital")
+		id := insertMRFFile(t, q, otherHospital, "sha256-ccc")
 		if id <= 0 {
 			t.Errorf("expected positive id, got %d", id)
 		}
@@ -259,16 +269,17 @@ func TestRegisterMRFFile(t *testing.T) {
 
 func TestUpdateMRFStatus(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Status Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-status")
+	hospitalID := insertHospital(t, q, "Status Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-status")
 
 	transitions := []string{"staging", "staged", "transforming", "transformed", "active"}
 
 	for _, newStatus := range transitions {
 		t.Run("to_"+newStatus, func(t *testing.T) {
-			_, err := pool.Exec(ctx, embedsql.UpdateMRFStatus, fileID, newStatus)
+			err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{MrfFileID: fileID, Status: newStatus})
 			if err != nil {
 				t.Fatalf("update to %s: %v", newStatus, err)
 			}
@@ -282,7 +293,7 @@ func TestUpdateMRFStatus(t *testing.T) {
 	}
 
 	t.Run("to_failed", func(t *testing.T) {
-		_, err := pool.Exec(ctx, embedsql.UpdateMRFStatus, fileID, "failed")
+		err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{MrfFileID: fileID, Status: "failed"})
 		if err != nil {
 			t.Fatalf("update to failed: %v", err)
 		}
@@ -298,10 +309,11 @@ func TestUpdateMRFStatus(t *testing.T) {
 
 func TestCopyToStaging(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Copy Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-copy")
+	hospitalID := insertHospital(t, q, "Copy Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-copy")
 	batchID := uuid.New()
 
 	t.Run("single_row", func(t *testing.T) {
@@ -401,10 +413,11 @@ func TestCopyToStaging(t *testing.T) {
 
 func TestUpsertPayers(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Payer Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-payer")
+	hospitalID := insertHospital(t, q, "Payer Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-payer")
 	batchID := uuid.New()
 
 	t.Run("inserts_distinct_payers", func(t *testing.T) {
@@ -418,7 +431,7 @@ func TestUpsertPayers(t *testing.T) {
 			insertStagingRow(t, pool, row)
 		}
 
-		_, err := pool.Exec(ctx, embedsql.UpsertPayers, batchID)
+		_, err := q.UpsertPayers(ctx, batchID)
 		if err != nil {
 			t.Fatalf("upsert payers: %v", err)
 		}
@@ -432,7 +445,7 @@ func TestUpsertPayers(t *testing.T) {
 
 	t.Run("idempotent", func(t *testing.T) {
 		// Run again — ON CONFLICT DO NOTHING
-		_, err := pool.Exec(ctx, embedsql.UpsertPayers, batchID)
+		_, err := q.UpsertPayers(ctx, batchID)
 		if err != nil {
 			t.Fatalf("second upsert: %v", err)
 		}
@@ -449,7 +462,7 @@ func TestUpsertPayers(t *testing.T) {
 		row := makeStagingRow(batch2, fileID, 1) // no payer fields set
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.UpsertPayers, batch2)
+		tag, err := q.UpsertPayers(ctx, batch2)
 		if err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
@@ -463,10 +476,11 @@ func TestUpsertPayers(t *testing.T) {
 
 func TestUpsertPlans(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Plan Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-plan")
+	hospitalID := insertHospital(t, q, "Plan Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-plan")
 	batchID := uuid.New()
 
 	// Insert staging rows with payer + plan data
@@ -488,13 +502,13 @@ func TestUpsertPlans(t *testing.T) {
 	}
 
 	// Must upsert payers first (plans references payers)
-	_, err := pool.Exec(ctx, embedsql.UpsertPayers, batchID)
+	_, err := q.UpsertPayers(ctx, batchID)
 	if err != nil {
 		t.Fatalf("upsert payers: %v", err)
 	}
 
 	t.Run("inserts_distinct_plans", func(t *testing.T) {
-		_, err := pool.Exec(ctx, embedsql.UpsertPlans, batchID)
+		_, err := q.UpsertPlans(ctx, batchID)
 		if err != nil {
 			t.Fatalf("upsert plans: %v", err)
 		}
@@ -521,7 +535,7 @@ func TestUpsertPlans(t *testing.T) {
 	})
 
 	t.Run("idempotent", func(t *testing.T) {
-		_, err := pool.Exec(ctx, embedsql.UpsertPlans, batchID)
+		_, err := q.UpsertPlans(ctx, batchID)
 		if err != nil {
 			t.Fatalf("second upsert: %v", err)
 		}
@@ -540,9 +554,9 @@ func TestUpsertPlans(t *testing.T) {
 			// PlanName/PlanNameNorm left nil
 		})
 		insertStagingRow(t, pool, row)
-		_, _ = pool.Exec(ctx, embedsql.UpsertPayers, batch2)
+		_, _ = q.UpsertPayers(ctx, batch2)
 
-		tag, err := pool.Exec(ctx, embedsql.UpsertPlans, batch2)
+		tag, err := q.UpsertPlans(ctx, batch2)
 		if err != nil {
 			t.Fatalf("upsert: %v", err)
 		}
@@ -556,10 +570,11 @@ func TestUpsertPlans(t *testing.T) {
 
 func TestTransformWideToLong(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Transform Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-transform")
+	hospitalID := insertHospital(t, q, "Transform Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-transform")
 	batchID := uuid.New()
 
 	t.Run("single_code_produces_one_row", func(t *testing.T) {
@@ -570,7 +585,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batchID)
+		tag, err := q.TransformWideToLong(ctx, batchID)
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -614,7 +629,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batch2)
+		tag, err := q.TransformWideToLong(ctx, batch2)
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -646,7 +661,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batch3)
+		tag, err := q.TransformWideToLong(ctx, batch3)
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -665,7 +680,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		pool.Exec(ctx, embedsql.TransformWideToLong, batch4)
+		q.TransformWideToLong(ctx, batch4)
 
 		var codeRaw, codeNorm string
 		pool.QueryRow(ctx,
@@ -707,7 +722,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batch5)
+		tag, err := q.TransformWideToLong(ctx, batch5)
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -748,7 +763,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		pool.Exec(ctx, embedsql.TransformWideToLong, batch6)
+		q.TransformWideToLong(ctx, batch6)
 
 		var gross, disc, neg, est, min, max *int64
 		var negPct *int32
@@ -797,10 +812,10 @@ func TestTransformWideToLong(t *testing.T) {
 		insertStagingRow(t, pool, row)
 
 		// Create payers and plans first
-		pool.Exec(ctx, embedsql.UpsertPayers, batch7)
-		pool.Exec(ctx, embedsql.UpsertPlans, batch7)
+		q.UpsertPayers(ctx, batch7)
+		q.UpsertPlans(ctx, batch7)
 
-		pool.Exec(ctx, embedsql.TransformWideToLong, batch7)
+		q.TransformWideToLong(ctx, batch7)
 
 		var payerID, planID *int64
 		var payerRaw, planRaw *string
@@ -830,7 +845,7 @@ func TestTransformWideToLong(t *testing.T) {
 		row := makeStagingRow(batch8, fileID, 1) // no codes set
 		insertStagingRow(t, pool, row)
 
-		tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batch8)
+		tag, err := q.TransformWideToLong(ctx, batch8)
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -846,17 +861,21 @@ func TestTransformWideToLong(t *testing.T) {
 
 func TestDeactivateOlderVersions(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Version Hospital")
-	file1 := insertMRFFile(t, pool, hospitalID, "sha-v1")
-	file2 := insertMRFFile(t, pool, hospitalID, "sha-v2")
+	hospitalID := insertHospital(t, q, "Version Hospital")
+	file1 := insertMRFFile(t, q, hospitalID, "sha-v1")
+	file2 := insertMRFFile(t, q, hospitalID, "sha-v2")
 
 	// Activate file1
-	pool.Exec(ctx, embedsql.ActivateVersion, file1)
+	q.ActivateVersion(ctx, file1)
 
 	t.Run("deactivates_older_for_same_hospital", func(t *testing.T) {
-		tag, err := pool.Exec(ctx, embedsql.DeactivateOlderVersions, hospitalID, file2)
+		tag, err := q.DeactivateOlderVersions(ctx, sqlcgen.DeactivateOlderVersionsParams{
+			HospitalID: hospitalID,
+			MrfFileID:  file2,
+		})
 		if err != nil {
 			t.Fatalf("deactivate: %v", err)
 		}
@@ -873,10 +892,13 @@ func TestDeactivateOlderVersions(t *testing.T) {
 
 	t.Run("preserves_current_version", func(t *testing.T) {
 		// Activate file2 to have something active
-		pool.Exec(ctx, embedsql.ActivateVersion, file2)
+		q.ActivateVersion(ctx, file2)
 
 		// Deactivating with file2 as current should not touch file2
-		pool.Exec(ctx, embedsql.DeactivateOlderVersions, hospitalID, file2)
+		q.DeactivateOlderVersions(ctx, sqlcgen.DeactivateOlderVersionsParams{
+			HospitalID: hospitalID,
+			MrfFileID:  file2,
+		})
 
 		var isActive bool
 		pool.QueryRow(ctx, "SELECT is_active FROM ingest.mrf_files WHERE mrf_file_id = $1", file2).Scan(&isActive)
@@ -886,12 +908,15 @@ func TestDeactivateOlderVersions(t *testing.T) {
 	})
 
 	t.Run("ignores_other_hospitals", func(t *testing.T) {
-		otherHospital := insertHospital(t, pool, "Other Version Hospital")
-		otherFile := insertMRFFile(t, pool, otherHospital, "sha-other")
-		pool.Exec(ctx, embedsql.ActivateVersion, otherFile)
+		otherHospital := insertHospital(t, q, "Other Version Hospital")
+		otherFile := insertMRFFile(t, q, otherHospital, "sha-other")
+		q.ActivateVersion(ctx, otherFile)
 
 		// Deactivating for hospitalID should not touch otherFile
-		pool.Exec(ctx, embedsql.DeactivateOlderVersions, hospitalID, file2)
+		q.DeactivateOlderVersions(ctx, sqlcgen.DeactivateOlderVersionsParams{
+			HospitalID: hospitalID,
+			MrfFileID:  file2,
+		})
 
 		var isActive bool
 		pool.QueryRow(ctx, "SELECT is_active FROM ingest.mrf_files WHERE mrf_file_id = $1", otherFile).Scan(&isActive)
@@ -905,10 +930,11 @@ func TestDeactivateOlderVersions(t *testing.T) {
 
 func TestActivateVersion(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Activate Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-activate")
+	hospitalID := insertHospital(t, q, "Activate Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-activate")
 
 	// Initially: is_active=false, status='pending'
 	var isActive bool
@@ -923,7 +949,7 @@ func TestActivateVersion(t *testing.T) {
 	}
 
 	// Activate
-	_, err := pool.Exec(ctx, embedsql.ActivateVersion, fileID)
+	err := q.ActivateVersion(ctx, fileID)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -942,10 +968,11 @@ func TestActivateVersion(t *testing.T) {
 
 func TestDeleteStagingBatch(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	hospitalID := insertHospital(t, pool, "Delete Hospital")
-	fileID := insertMRFFile(t, pool, hospitalID, "sha-delete")
+	hospitalID := insertHospital(t, q, "Delete Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-delete")
 
 	batch1 := uuid.New()
 	batch2 := uuid.New()
@@ -959,7 +986,7 @@ func TestDeleteStagingBatch(t *testing.T) {
 	}
 
 	t.Run("deletes_only_matching_batch", func(t *testing.T) {
-		tag, err := pool.Exec(ctx, embedsql.DeleteStagingBatch, batch1)
+		tag, err := q.DeleteStagingBatch(ctx, batch1)
 		if err != nil {
 			t.Fatalf("delete: %v", err)
 		}
@@ -977,7 +1004,7 @@ func TestDeleteStagingBatch(t *testing.T) {
 	})
 
 	t.Run("delete_nonexistent_batch_ok", func(t *testing.T) {
-		tag, err := pool.Exec(ctx, embedsql.DeleteStagingBatch, uuid.New())
+		tag, err := q.DeleteStagingBatch(ctx, uuid.New())
 		if err != nil {
 			t.Fatalf("delete nonexistent: %v", err)
 		}
@@ -987,15 +1014,234 @@ func TestDeleteStagingBatch(t *testing.T) {
 	})
 }
 
-// ---------- analyze_partitions.sql ----------
+// ---------- delete_serving_by_file.sql ----------
 
-func TestAnalyzePartitions(t *testing.T) {
+func TestDeleteServingByFile(t *testing.T) {
 	pool := setupDB(t)
+	q := sqlcgen.New(pool)
 	ctx := context.Background()
 
-	_, err := pool.Exec(ctx, embedsql.AnalyzePartitions)
-	if err != nil {
-		t.Fatalf("ANALYZE should succeed on empty tables: %v", err)
+	hospitalID := insertHospital(t, q, "Serving Delete Hospital")
+	file1 := insertMRFFile(t, q, hospitalID, "sha-serv1")
+	file2 := insertMRFFile(t, q, hospitalID, "sha-serv2")
+
+	// Stage and transform rows for both files
+	batch1 := uuid.New()
+	batch2 := uuid.New()
+	for i := int64(1); i <= 3; i++ {
+		insertStagingRow(t, pool, makeStagingRow(batch1, file1, i, func(r *model.StagingRow) {
+			r.CPTCode = strPtr(fmt.Sprintf("9921%d", i))
+		}))
+	}
+	for i := int64(1); i <= 2; i++ {
+		insertStagingRow(t, pool, makeStagingRow(batch2, file2, i, func(r *model.StagingRow) {
+			r.HCPCSCode = strPtr(fmt.Sprintf("J010%d", i))
+		}))
+	}
+	if _, err := q.TransformWideToLong(ctx, batch1); err != nil {
+		t.Fatalf("transform batch1: %v", err)
+	}
+	if _, err := q.TransformWideToLong(ctx, batch2); err != nil {
+		t.Fatalf("transform batch2: %v", err)
+	}
+
+	t.Run("deletes_only_matching_file", func(t *testing.T) {
+		err := q.DeleteServingByFile(ctx, file1)
+		if err != nil {
+			t.Fatalf("delete serving: %v", err)
+		}
+
+		var count int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM mrf.prices_by_code WHERE mrf_file_id = $1", file1).Scan(&count)
+		if count != 0 {
+			t.Errorf("expected 0 rows for file1 after delete, got %d", count)
+		}
+	})
+
+	t.Run("preserves_other_files", func(t *testing.T) {
+		var count int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM mrf.prices_by_code WHERE mrf_file_id = $1", file2).Scan(&count)
+		if count != 2 {
+			t.Errorf("expected 2 rows for file2, got %d", count)
+		}
+	})
+
+	t.Run("noop_on_nonexistent_file", func(t *testing.T) {
+		err := q.DeleteServingByFile(ctx, 999999)
+		if err != nil {
+			t.Fatalf("delete nonexistent: %v", err)
+		}
+	})
+
+	// Clean up for next subtest
+	pool.Exec(ctx, "DELETE FROM mrf.prices_by_code WHERE mrf_file_id = $1", file2)
+	pool.Exec(ctx, "DELETE FROM ingest.stage_charge_rows WHERE ingest_batch_id = $1", batch1)
+	pool.Exec(ctx, "DELETE FROM ingest.stage_charge_rows WHERE ingest_batch_id = $1", batch2)
+
+	t.Run("force_reimport_no_duplicates", func(t *testing.T) {
+		fileID := insertMRFFile(t, q, hospitalID, "sha-reimport")
+
+		// First import: stage + transform
+		batchA := uuid.New()
+		for i := int64(1); i <= 2; i++ {
+			insertStagingRow(t, pool, makeStagingRow(batchA, fileID, i, func(r *model.StagingRow) {
+				r.CPTCode = strPtr("99213")
+				r.GrossChargeCents = int64Ptr(10000)
+				r.Description = fmt.Sprintf("original charge %d", i)
+			}))
+		}
+		tag, err := q.TransformWideToLong(ctx, batchA)
+		if err != nil {
+			t.Fatalf("first transform: %v", err)
+		}
+		if tag.RowsAffected() != 2 {
+			t.Fatalf("expected 2 rows on first import, got %d", tag.RowsAffected())
+		}
+
+		// Clean staging (as pipeline does)
+		q.DeleteStagingBatch(ctx, batchA)
+
+		// Re-import: delete old serving rows, stage new data, transform
+		if err := q.DeleteServingByFile(ctx, fileID); err != nil {
+			t.Fatalf("delete old serving: %v", err)
+		}
+
+		batchB := uuid.New()
+		for i := int64(1); i <= 3; i++ {
+			insertStagingRow(t, pool, makeStagingRow(batchB, fileID, i, func(r *model.StagingRow) {
+				r.CPTCode = strPtr("99214")
+				r.GrossChargeCents = int64Ptr(20000)
+				r.Description = fmt.Sprintf("updated charge %d", i)
+			}))
+		}
+		tag, err = q.TransformWideToLong(ctx, batchB)
+		if err != nil {
+			t.Fatalf("second transform: %v", err)
+		}
+		if tag.RowsAffected() != 3 {
+			t.Fatalf("expected 3 rows on re-import, got %d", tag.RowsAffected())
+		}
+
+		// Verify: exactly 3 rows, all with new data (no stale duplicates)
+		var total int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM mrf.prices_by_code WHERE mrf_file_id = $1", fileID).Scan(&total)
+		if total != 3 {
+			t.Errorf("expected exactly 3 serving rows after re-import, got %d (duplicates present)", total)
+		}
+
+		var gross *int64
+		pool.QueryRow(ctx,
+			"SELECT DISTINCT gross_charge_cents FROM mrf.prices_by_code WHERE mrf_file_id = $1", fileID).Scan(&gross)
+		if gross == nil || *gross != 20000 {
+			t.Errorf("expected all rows to have updated gross=20000, got %v", gross)
+		}
+	})
+}
+
+// ---------- delete_staging_by_file.sql ----------
+
+func TestDeleteStagingByFile(t *testing.T) {
+	pool := setupDB(t)
+	q := sqlcgen.New(pool)
+	ctx := context.Background()
+
+	hospitalID := insertHospital(t, q, "Staging Delete Hospital")
+	file1 := insertMRFFile(t, q, hospitalID, "sha-stgdel1")
+	file2 := insertMRFFile(t, q, hospitalID, "sha-stgdel2")
+
+	batch1 := uuid.New()
+	batch2 := uuid.New()
+	for i := int64(1); i <= 3; i++ {
+		insertStagingRow(t, pool, makeStagingRow(batch1, file1, i, func(r *model.StagingRow) {
+			r.CPTCode = strPtr("99213")
+		}))
+	}
+	for i := int64(1); i <= 2; i++ {
+		insertStagingRow(t, pool, makeStagingRow(batch2, file2, i, func(r *model.StagingRow) {
+			r.CPTCode = strPtr("99214")
+		}))
+	}
+
+	t.Run("deletes_only_matching_file", func(t *testing.T) {
+		err := q.DeleteStagingByFile(ctx, file1)
+		if err != nil {
+			t.Fatalf("delete staging by file: %v", err)
+		}
+
+		var count int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM ingest.stage_charge_rows WHERE mrf_file_id = $1", file1).Scan(&count)
+		if count != 0 {
+			t.Errorf("expected 0 staging rows for file1 after delete, got %d", count)
+		}
+	})
+
+	t.Run("preserves_other_files", func(t *testing.T) {
+		var count int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM ingest.stage_charge_rows WHERE mrf_file_id = $1", file2).Scan(&count)
+		if count != 2 {
+			t.Errorf("expected 2 staging rows for file2, got %d", count)
+		}
+	})
+
+	t.Run("noop_on_nonexistent_file", func(t *testing.T) {
+		err := q.DeleteStagingByFile(ctx, 999999)
+		if err != nil {
+			t.Fatalf("delete nonexistent: %v", err)
+		}
+	})
+
+	t.Run("cleans_orphaned_staging_before_reimport", func(t *testing.T) {
+		fileID := insertMRFFile(t, q, hospitalID, "sha-stgorphan")
+
+		// First import: stage rows
+		batchA := uuid.New()
+		for i := int64(1); i <= 3; i++ {
+			insertStagingRow(t, pool, makeStagingRow(batchA, fileID, i, func(r *model.StagingRow) {
+				r.CPTCode = strPtr("99213")
+			}))
+		}
+
+		// Simulate a failed import — staging rows left behind (no cleanup)
+
+		// Re-import: delete orphaned staging, then stage new data
+		if err := q.DeleteStagingByFile(ctx, fileID); err != nil {
+			t.Fatalf("delete orphaned staging: %v", err)
+		}
+
+		var countBefore int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM ingest.stage_charge_rows WHERE mrf_file_id = $1", fileID).Scan(&countBefore)
+		if countBefore != 0 {
+			t.Fatalf("expected 0 rows after cleanup, got %d", countBefore)
+		}
+
+		// Stage new batch
+		batchB := uuid.New()
+		for i := int64(1); i <= 2; i++ {
+			insertStagingRow(t, pool, makeStagingRow(batchB, fileID, i, func(r *model.StagingRow) {
+				r.CPTCode = strPtr("99214")
+			}))
+		}
+
+		var countAfter int64
+		pool.QueryRow(ctx, "SELECT count(*) FROM ingest.stage_charge_rows WHERE mrf_file_id = $1", fileID).Scan(&countAfter)
+		if countAfter != 2 {
+			t.Errorf("expected exactly 2 staging rows after re-stage, got %d", countAfter)
+		}
+	})
+}
+
+// ---------- analyze (prices + staging) ----------
+
+func TestAnalyze(t *testing.T) {
+	pool := setupDB(t)
+	q := sqlcgen.New(pool)
+	ctx := context.Background()
+
+	if err := q.AnalyzePrices(ctx); err != nil {
+		t.Fatalf("ANALYZE prices should succeed on empty tables: %v", err)
+	}
+	if err := q.AnalyzeStaging(ctx); err != nil {
+		t.Fatalf("ANALYZE staging should succeed on empty tables: %v", err)
 	}
 }
 
@@ -1007,8 +1253,10 @@ func TestWithTx(t *testing.T) {
 
 	t.Run("commits_on_success", func(t *testing.T) {
 		err := db.WithTx(ctx, pool, func(tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, embedsql.ResolveHospital,
-				"TxCommit Hospital", nil, nil, nil, nil)
+			qtx := sqlcgen.New(tx)
+			_, err := qtx.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+				HospitalName: "TxCommit Hospital",
+			})
 			return err
 		})
 		if err != nil {
@@ -1024,8 +1272,10 @@ func TestWithTx(t *testing.T) {
 
 	t.Run("rolls_back_on_error", func(t *testing.T) {
 		err := db.WithTx(ctx, pool, func(tx pgx.Tx) error {
-			tx.Exec(ctx, embedsql.ResolveHospital,
-				"TxRollback Hospital", nil, nil, nil, nil)
+			qtx := sqlcgen.New(tx)
+			qtx.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+				HospitalName: "TxRollback Hospital",
+			})
 			return fmt.Errorf("intentional error")
 		})
 		if err == nil {
@@ -1047,8 +1297,10 @@ func TestWithTx(t *testing.T) {
 		}()
 
 		db.WithTx(ctx, pool, func(tx pgx.Tx) error {
-			tx.Exec(ctx, embedsql.ResolveHospital,
-				"TxPanic Hospital", nil, nil, nil, nil)
+			qtx := sqlcgen.New(tx)
+			qtx.ResolveHospital(ctx, sqlcgen.ResolveHospitalParams{
+				HospitalName: "TxPanic Hospital",
+			})
 			panic("intentional panic")
 		})
 	})

@@ -1,5 +1,4 @@
--- update_mrf_status.sql
--- $1 = mrf_file_id, $2 = new status
+-- name: UpdateMRFStatus :exec
 UPDATE ingest.mrf_files
-SET status = $2
-WHERE mrf_file_id = $1;
+SET status = sqlc.arg(status)
+WHERE mrf_file_id = sqlc.arg(mrf_file_id);

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gyeh/pricestats/internal/config"
 	"github.com/gyeh/pricestats/internal/model"
+	"github.com/gyeh/pricestats/internal/sqlcgen"
 )
 
 // PipelineError wraps an error with the phase where it occurred.
@@ -30,10 +31,11 @@ func (e *PipelineError) Unwrap() error {
 // transform → finalize → cleanup.
 func Run(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, cfg *config.Config) (*model.IngestSummary, error) {
 	totalStart := time.Now()
+	q := sqlcgen.New(pool)
 
 	// Phase 1: Preflight
 	log.Info().Str("file", cfg.FilePath).Msg("starting preflight")
-	pf, err := Preflight(ctx, pool, log, cfg.FilePath, cfg.Force)
+	pf, err := Preflight(ctx, q, log, cfg.FilePath, cfg.Force)
 	if err != nil {
 		return nil, &PipelineError{Phase: "preflight", Err: err}
 	}
@@ -54,25 +56,31 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, cfg *confi
 
 	// Phase 2: Stage
 	log.Info().Msg("starting staging")
-	if err := UpdateStatus(ctx, pool, pf.MRFFileID, "staging"); err != nil {
+	if err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "staging", MrfFileID: pf.MRFFileID}); err != nil {
 		return nil, &PipelineError{Phase: "stage", Err: err}
+	}
+
+	// Delete orphaned staging rows from prior failed imports of this file
+	if err := q.DeleteStagingByFile(ctx, pf.MRFFileID); err != nil {
+		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
+		return nil, &PipelineError{Phase: "stage", Err: fmt.Errorf("delete old staging rows: %w", err)}
 	}
 
 	stageResult, err := Stage(ctx, pool, log, pf, cfg.IncludePayerPrices)
 	if err != nil {
-		_ = UpdateStatus(ctx, pool, pf.MRFFileID, "failed")
+		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
 		return nil, &PipelineError{Phase: "stage", Err: err}
 	}
 
-	if err := UpdateStatus(ctx, pool, pf.MRFFileID, "staged"); err != nil {
+	if err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "staged", MrfFileID: pf.MRFFileID}); err != nil {
 		return nil, &PipelineError{Phase: "stage", Err: err}
 	}
 
 	// Phase 3: Dimension upserts (only when payer/plan data is included)
 	if cfg.IncludePayerPrices {
 		log.Info().Msg("upserting dimensions")
-		if err := UpsertDimensions(ctx, pool, log, pf.IngestBatchID); err != nil {
-			_ = UpdateStatus(ctx, pool, pf.MRFFileID, "failed")
+		if err := UpsertDimensions(ctx, q, log, pf.IngestBatchID); err != nil {
+			_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
 			return nil, &PipelineError{Phase: "dimensions", Err: err}
 		}
 	} else {
@@ -81,32 +89,38 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, cfg *confi
 
 	// Phase 4: Transform
 	log.Info().Msg("starting transform")
-	if err := UpdateStatus(ctx, pool, pf.MRFFileID, "transforming"); err != nil {
+	if err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "transforming", MrfFileID: pf.MRFFileID}); err != nil {
 		return nil, &PipelineError{Phase: "transform", Err: err}
 	}
 
-	transformResult, err := Transform(ctx, pool, log, pf.IngestBatchID)
+	// Delete old serving rows before inserting new ones (no-op on first import)
+	if err := q.DeleteServingByFile(ctx, pf.MRFFileID); err != nil {
+		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
+		return nil, &PipelineError{Phase: "transform", Err: fmt.Errorf("delete old serving rows: %w", err)}
+	}
+
+	transformResult, err := Transform(ctx, q, log, pf.IngestBatchID)
 	if err != nil {
-		_ = UpdateStatus(ctx, pool, pf.MRFFileID, "failed")
+		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
 		return nil, &PipelineError{Phase: "transform", Err: err}
 	}
 
-	if err := UpdateStatus(ctx, pool, pf.MRFFileID, "transformed"); err != nil {
+	if err := q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "transformed", MrfFileID: pf.MRFFileID}); err != nil {
 		return nil, &PipelineError{Phase: "transform", Err: err}
 	}
 
 	// Phase 5: Finalize
 	log.Info().Msg("finalizing")
-	finalizeDur, err := Finalize(ctx, pool, log, pf.HospitalID, pf.MRFFileID, cfg.ActivateVersion)
+	finalizeDur, err := Finalize(ctx, q, log, pf.HospitalID, pf.MRFFileID, cfg.ActivateVersion)
 	if err != nil {
-		_ = UpdateStatus(ctx, pool, pf.MRFFileID, "failed")
+		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
 		return nil, &PipelineError{Phase: "finalize", Err: err}
 	}
 
 	// Phase 6: Cleanup staging
 	if !cfg.KeepStaging {
 		log.Info().Msg("cleaning up staging")
-		if err := Cleanup(ctx, pool, log, pf.IngestBatchID); err != nil {
+		if err := Cleanup(ctx, q, log, pf.IngestBatchID); err != nil {
 			log.Warn().Err(err).Msg("staging cleanup failed (non-fatal)")
 		}
 	}

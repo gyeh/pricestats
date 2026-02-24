@@ -1,4 +1,3 @@
--- delete_staging_batch.sql
--- $1 = ingest_batch_id
+-- name: DeleteStagingBatch :execresult
 DELETE FROM ingest.stage_charge_rows
-WHERE ingest_batch_id = $1;
+WHERE ingest_batch_id = sqlc.arg(ingest_batch_id);

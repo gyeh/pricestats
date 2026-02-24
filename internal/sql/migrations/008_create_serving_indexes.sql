@@ -1,8 +1,7 @@
 DO $$
 DECLARE
   parts text[] := ARRAY[
-    'cpt','hcpcs','ms_drg','ndc','rc','icd','drg','cdm','local',
-    'apc','eapg','hipps','cdt','r_drg','s_drg','aps_drg','ap_drg','apr_drg','tris_drg'
+    'cpt','hcpcs','ms_drg','ndc','rc','icd','drg','cdm','local', 'apc','eapg','hipps','cdt','r_drg','s_drg','aps_drg','ap_drg','apr_drg','tris_drg'
   ];
   p text;
 BEGIN

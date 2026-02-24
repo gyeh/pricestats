@@ -6,10 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
-	embedsql "github.com/gyeh/pricestats/internal/sql"
+	"github.com/gyeh/pricestats/internal/sqlcgen"
 )
 
 // TransformResult holds metrics from the wide→long transformation.
@@ -20,10 +19,10 @@ type TransformResult struct {
 
 // Transform executes the wide→long INSERT...SELECT from staging into the
 // serving table (mrf.prices_by_code).
-func Transform(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, batchID uuid.UUID) (*TransformResult, error) {
+func Transform(ctx context.Context, q *sqlcgen.Queries, log zerolog.Logger, batchID uuid.UUID) (*TransformResult, error) {
 	start := time.Now()
 
-	tag, err := pool.Exec(ctx, embedsql.TransformWideToLong, batchID)
+	tag, err := q.TransformWideToLong(ctx, batchID)
 	if err != nil {
 		return nil, fmt.Errorf("transform wide to long: %w", err)
 	}

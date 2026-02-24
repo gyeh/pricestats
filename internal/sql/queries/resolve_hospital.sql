@@ -1,8 +1,5 @@
--- resolve_hospital.sql
--- Upserts a hospital by name and returns the hospital_id.
--- $1 = hospital_name, $2 = hospital_location, $3 = hospital_address,
--- $4 = license_number, $5 = license_state
+-- name: ResolveHospital :one
 INSERT INTO ref.hospitals (hospital_name, hospital_location, hospital_address, license_number, license_state)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (sqlc.arg(hospital_name), sqlc.arg(hospital_location), sqlc.arg(hospital_address), sqlc.arg(license_number), sqlc.arg(license_state))
 ON CONFLICT DO NOTHING
 RETURNING hospital_id;
