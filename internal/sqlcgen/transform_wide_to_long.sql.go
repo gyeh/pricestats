@@ -78,31 +78,24 @@ LEFT JOIN ref.plans pl
  AND pl.plan_name_norm = s.plan_name_norm
 CROSS JOIN LATERAL (
   VALUES
-    ('CPT',      s.cpt_code),
-    ('HCPCS',    s.hcpcs_code),
-    ('MS-DRG',   s.ms_drg_code),
-    ('NDC',      s.ndc_code),
-    ('RC',       s.rc_code),
-    ('ICD',      s.icd_code),
-    ('DRG',      s.drg_code),
-    ('CDM',      s.cdm_code),
-    ('LOCAL',    s.local_code),
-    ('APC',      s.apc_code),
-    ('EAPG',     s.eapg_code),
-    ('HIPPS',    s.hipps_code),
-    ('CDT',      s.cdt_code),
-    ('R-DRG',    s.r_drg_code),
-    ('S-DRG',    s.s_drg_code),
-    ('APS-DRG',  s.aps_drg_code),
-    ('AP-DRG',   s.ap_drg_code),
-    ('APR-DRG',  s.apr_drg_code),
-    ('TRIS-DRG', s.tris_drg_code)
+    ('CPT',    s.cpt_code),
+    ('HCPCS',  s.hcpcs_code),
+    ('MS-DRG', s.ms_drg_code),
+    ('NDC',    s.ndc_code),
+    ('CDT',    s.cdt_code)
 ) AS c(code_type, code_raw)
 WHERE s.ingest_batch_id = $1
   AND c.code_raw IS NOT NULL
   AND c.code_raw <> ''
+  AND ($2::text[] IS NULL
+       OR c.code_type = ANY($2::text[]))
 `
 
-func (q *Queries) TransformWideToLong(ctx context.Context, ingestBatchID uuid.UUID) (pgconn.CommandTag, error) {
-	return q.db.Exec(ctx, transformWideToLong, ingestBatchID)
+type TransformWideToLongParams struct {
+	IngestBatchID uuid.UUID
+	CodeTypes     []string
+}
+
+func (q *Queries) TransformWideToLong(ctx context.Context, arg TransformWideToLongParams) (pgconn.CommandTag, error) {
+	return q.db.Exec(ctx, transformWideToLong, arg.IngestBatchID, arg.CodeTypes)
 }

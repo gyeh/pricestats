@@ -99,7 +99,7 @@ func Run(ctx context.Context, pool *pgxpool.Pool, log zerolog.Logger, cfg *confi
 		return nil, &PipelineError{Phase: "transform", Err: fmt.Errorf("delete old serving rows: %w", err)}
 	}
 
-	transformResult, err := Transform(ctx, q, log, pf.IngestBatchID)
+	transformResult, err := Transform(ctx, q, log, pf.IngestBatchID, cfg.CodeTypes)
 	if err != nil {
 		_ = q.UpdateMRFStatus(ctx, sqlcgen.UpdateMRFStatusParams{Status: "failed", MrfFileID: pf.MRFFileID})
 		return nil, &PipelineError{Phase: "transform", Err: err}

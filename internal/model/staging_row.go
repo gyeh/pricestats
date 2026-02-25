@@ -31,25 +31,11 @@ type StagingRow struct {
 	BillingClass *string
 
 	// Wide code columns (normalized)
-	CPTCode     *string
-	HCPCSCode   *string
-	MSDRGCode   *string
-	NDCCode     *string
-	RCCode      *string
-	ICDCode     *string
-	DRGCode     *string
-	CDMCode     *string
-	LOCALCode   *string
-	APCCode     *string
-	EAPGCode    *string
-	HIPPSCode   *string
-	CDTCode     *string
-	RDRGCode    *string
-	SDRGCode    *string
-	APSDRGCode  *string
-	APDRGCode   *string
-	APRDRGCode  *string
-	TRISDRGCode *string
+	CPTCode   *string
+	HCPCSCode *string
+	MSDRGCode *string
+	NDCCode   *string
+	CDTCode   *string
 
 	// Payer / plan
 	PayerName     *string
@@ -99,21 +85,7 @@ func StagingColumns() []string {
 		"hcpcs_code",
 		"ms_drg_code",
 		"ndc_code",
-		"rc_code",
-		"icd_code",
-		"drg_code",
-		"cdm_code",
-		"local_code",
-		"apc_code",
-		"eapg_code",
-		"hipps_code",
 		"cdt_code",
-		"r_drg_code",
-		"s_drg_code",
-		"aps_drg_code",
-		"ap_drg_code",
-		"apr_drg_code",
-		"tris_drg_code",
 		"payer_name",
 		"payer_name_norm",
 		"plan_name",
@@ -158,21 +130,7 @@ func (r *StagingRow) CopyValues() []any {
 		r.HCPCSCode,
 		r.MSDRGCode,
 		r.NDCCode,
-		r.RCCode,
-		r.ICDCode,
-		r.DRGCode,
-		r.CDMCode,
-		r.LOCALCode,
-		r.APCCode,
-		r.EAPGCode,
-		r.HIPPSCode,
 		r.CDTCode,
-		r.RDRGCode,
-		r.SDRGCode,
-		r.APSDRGCode,
-		r.APDRGCode,
-		r.APRDRGCode,
-		r.TRISDRGCode,
 		r.PayerName,
 		r.PayerNameNorm,
 		r.PlanName,

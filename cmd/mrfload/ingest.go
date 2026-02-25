@@ -19,9 +19,12 @@ var ingestCmd = &cobra.Command{
 	RunE:  runIngest,
 }
 
+var configFile string
+
 func init() {
 	f := ingestCmd.Flags()
 	f.StringVar(&cfg.FilePath, "file", "", "Path to Parquet file (required)")
+	f.StringVar(&configFile, "config", "", "Path to YAML config file (optional)")
 	f.BoolVar(&cfg.ActivateVersion, "activate-version", false, "Mark this file version as active")
 	f.BoolVar(&cfg.Force, "force", false, "Re-import even if file SHA already exists")
 	f.BoolVar(&cfg.KeepStaging, "keep-staging", false, "Keep staging rows after transform")
@@ -33,6 +36,13 @@ func init() {
 func runIngest(cmd *cobra.Command, args []string) error {
 	log := logging.Setup(cfg.LogFormat)
 	ctx := context.Background()
+
+	if configFile != "" {
+		if err := cfg.LoadFromFile(configFile); err != nil {
+			log.Error().Err(err).Msg("config file load failed")
+			os.Exit(exitcode.UsageError)
+		}
+	}
 
 	if err := cfg.ValidateWithDSN(); err != nil {
 		log.Error().Err(err).Msg("config validation failed")

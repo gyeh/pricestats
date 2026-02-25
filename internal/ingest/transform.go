@@ -19,10 +19,13 @@ type TransformResult struct {
 
 // Transform executes the wide→long INSERT...SELECT from staging into the
 // serving table (mrf.prices_by_code).
-func Transform(ctx context.Context, q *sqlcgen.Queries, log zerolog.Logger, batchID uuid.UUID) (*TransformResult, error) {
+func Transform(ctx context.Context, q *sqlcgen.Queries, log zerolog.Logger, batchID uuid.UUID, codeTypes []string) (*TransformResult, error) {
 	start := time.Now()
 
-	tag, err := q.TransformWideToLong(ctx, batchID)
+	tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{
+		IngestBatchID: batchID,
+		CodeTypes:     codeTypes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("transform wide to long: %w", err)
 	}

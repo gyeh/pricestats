@@ -134,8 +134,8 @@ func TestMigrations_PartitionsExist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query partitions: %v", err)
 	}
-	if count != 19 {
-		t.Errorf("expected 19 partitions, got %d", count)
+	if count != 5 {
+		t.Errorf("expected 5 partitions, got %d", count)
 	}
 }
 
@@ -585,7 +585,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := q.TransformWideToLong(ctx, batchID)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batchID})
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -624,21 +624,21 @@ func TestTransformWideToLong(t *testing.T) {
 		row := makeStagingRow(batch2, fileID, 1, func(r *model.StagingRow) {
 			r.CPTCode = strPtr("99213")
 			r.HCPCSCode = strPtr("J0120")
-			r.RCCode = strPtr("0250")
+			r.NDCCode = strPtr("0250")
 			r.Description = "Multi code"
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := q.TransformWideToLong(ctx, batch2)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch2})
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
 		if tag.RowsAffected() != 3 {
-			t.Errorf("expected 3 serving rows (CPT+HCPCS+RC), got %d", tag.RowsAffected())
+			t.Errorf("expected 3 serving rows (CPT+HCPCS+NDC), got %d", tag.RowsAffected())
 		}
 
 		// Verify each code type exists
-		for _, ct := range []string{"CPT", "HCPCS", "RC"} {
+		for _, ct := range []string{"CPT", "HCPCS", "NDC"} {
 			var exists bool
 			pool.QueryRow(ctx,
 				"SELECT EXISTS (SELECT 1 FROM mrf.prices_by_code WHERE mrf_file_id = $1 AND code_type = $2)",
@@ -661,7 +661,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := q.TransformWideToLong(ctx, batch3)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch3})
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -680,7 +680,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		q.TransformWideToLong(ctx, batch4)
+		q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch4})
 
 		var codeRaw, codeNorm string
 		pool.QueryRow(ctx,
@@ -697,44 +697,27 @@ func TestTransformWideToLong(t *testing.T) {
 		pool.Exec(ctx, "DELETE FROM ingest.stage_charge_rows WHERE ingest_batch_id = $1", batch4)
 	})
 
-	t.Run("all_19_code_types", func(t *testing.T) {
+	t.Run("all_5_code_types", func(t *testing.T) {
 		batch5 := uuid.New()
 		row := makeStagingRow(batch5, fileID, 1, func(r *model.StagingRow) {
 			r.CPTCode = strPtr("C1")
 			r.HCPCSCode = strPtr("H1")
 			r.MSDRGCode = strPtr("M1")
 			r.NDCCode = strPtr("N1")
-			r.RCCode = strPtr("R1")
-			r.ICDCode = strPtr("I1")
-			r.DRGCode = strPtr("D1")
-			r.CDMCode = strPtr("CD1")
-			r.LOCALCode = strPtr("L1")
-			r.APCCode = strPtr("A1")
-			r.EAPGCode = strPtr("E1")
-			r.HIPPSCode = strPtr("HP1")
 			r.CDTCode = strPtr("CT1")
-			r.RDRGCode = strPtr("RD1")
-			r.SDRGCode = strPtr("SD1")
-			r.APSDRGCode = strPtr("AS1")
-			r.APDRGCode = strPtr("AD1")
-			r.APRDRGCode = strPtr("AR1")
-			r.TRISDRGCode = strPtr("T1")
 		})
 		insertStagingRow(t, pool, row)
 
-		tag, err := q.TransformWideToLong(ctx, batch5)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch5})
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
-		if tag.RowsAffected() != 19 {
-			t.Errorf("expected 19 serving rows, got %d", tag.RowsAffected())
+		if tag.RowsAffected() != 5 {
+			t.Errorf("expected 5 serving rows, got %d", tag.RowsAffected())
 		}
 
 		// Verify each goes to correct partition
-		allTypes := []string{
-			"CPT", "HCPCS", "MS-DRG", "NDC", "RC", "ICD", "DRG", "CDM", "LOCAL",
-			"APC", "EAPG", "HIPPS", "CDT", "R-DRG", "S-DRG", "APS-DRG", "AP-DRG", "APR-DRG", "TRIS-DRG",
-		}
+		allTypes := []string{"CPT", "HCPCS", "MS-DRG", "NDC", "CDT"}
 		for _, ct := range allTypes {
 			var exists bool
 			pool.QueryRow(ctx,
@@ -763,7 +746,7 @@ func TestTransformWideToLong(t *testing.T) {
 		})
 		insertStagingRow(t, pool, row)
 
-		q.TransformWideToLong(ctx, batch6)
+		q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch6})
 
 		var gross, disc, neg, est, min, max *int64
 		var negPct *int32
@@ -815,7 +798,7 @@ func TestTransformWideToLong(t *testing.T) {
 		q.UpsertPayers(ctx, batch7)
 		q.UpsertPlans(ctx, batch7)
 
-		q.TransformWideToLong(ctx, batch7)
+		q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch7})
 
 		var payerID, planID *int64
 		var payerRaw, planRaw *string
@@ -845,7 +828,7 @@ func TestTransformWideToLong(t *testing.T) {
 		row := makeStagingRow(batch8, fileID, 1) // no codes set
 		insertStagingRow(t, pool, row)
 
-		tag, err := q.TransformWideToLong(ctx, batch8)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch8})
 		if err != nil {
 			t.Fatalf("transform: %v", err)
 		}
@@ -854,6 +837,58 @@ func TestTransformWideToLong(t *testing.T) {
 		}
 
 		pool.Exec(ctx, "DELETE FROM ingest.stage_charge_rows WHERE ingest_batch_id = $1", batch8)
+	})
+}
+
+// ---------- transform code_types filter ----------
+
+func TestTransformWideToLong_CodeTypeFilter(t *testing.T) {
+	pool := setupDB(t)
+	q := sqlcgen.New(pool)
+	ctx := context.Background()
+
+	hospitalID := insertHospital(t, q, "Filter Hospital")
+	fileID := insertMRFFile(t, q, hospitalID, "sha-filter")
+	batchID := uuid.New()
+
+	// Stage a row with all 5 codes set
+	row := makeStagingRow(batchID, fileID, 1, func(r *model.StagingRow) {
+		r.CPTCode = strPtr("C1")
+		r.HCPCSCode = strPtr("H1")
+		r.MSDRGCode = strPtr("M1")
+		r.NDCCode = strPtr("N1")
+		r.CDTCode = strPtr("CT1")
+	})
+	insertStagingRow(t, pool, row)
+
+	t.Run("filter_to_subset", func(t *testing.T) {
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{
+			IngestBatchID: batchID,
+			CodeTypes:     []string{"CPT", "HCPCS"},
+		})
+		if err != nil {
+			t.Fatalf("transform: %v", err)
+		}
+		if tag.RowsAffected() != 2 {
+			t.Errorf("expected 2 serving rows (CPT+HCPCS), got %d", tag.RowsAffected())
+		}
+
+		pool.Exec(ctx, "DELETE FROM mrf.prices_by_code WHERE mrf_file_id = $1", fileID)
+	})
+
+	t.Run("nil_code_types_includes_all", func(t *testing.T) {
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{
+			IngestBatchID: batchID,
+			CodeTypes:     nil,
+		})
+		if err != nil {
+			t.Fatalf("transform: %v", err)
+		}
+		if tag.RowsAffected() != 5 {
+			t.Errorf("expected 5 serving rows (all codes), got %d", tag.RowsAffected())
+		}
+
+		pool.Exec(ctx, "DELETE FROM mrf.prices_by_code WHERE mrf_file_id = $1", fileID)
 	})
 }
 
@@ -1038,10 +1073,10 @@ func TestDeleteServingByFile(t *testing.T) {
 			r.HCPCSCode = strPtr(fmt.Sprintf("J010%d", i))
 		}))
 	}
-	if _, err := q.TransformWideToLong(ctx, batch1); err != nil {
+	if _, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch1}); err != nil {
 		t.Fatalf("transform batch1: %v", err)
 	}
-	if _, err := q.TransformWideToLong(ctx, batch2); err != nil {
+	if _, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batch2}); err != nil {
 		t.Fatalf("transform batch2: %v", err)
 	}
 
@@ -1090,7 +1125,7 @@ func TestDeleteServingByFile(t *testing.T) {
 				r.Description = fmt.Sprintf("original charge %d", i)
 			}))
 		}
-		tag, err := q.TransformWideToLong(ctx, batchA)
+		tag, err := q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batchA})
 		if err != nil {
 			t.Fatalf("first transform: %v", err)
 		}
@@ -1114,7 +1149,7 @@ func TestDeleteServingByFile(t *testing.T) {
 				r.Description = fmt.Sprintf("updated charge %d", i)
 			}))
 		}
-		tag, err = q.TransformWideToLong(ctx, batchB)
+		tag, err = q.TransformWideToLong(ctx, sqlcgen.TransformWideToLongParams{IngestBatchID: batchB})
 		if err != nil {
 			t.Fatalf("second transform: %v", err)
 		}

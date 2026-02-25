@@ -692,5 +692,64 @@ func normalizeCodeStr(raw string) string {
 	return b.String()
 }
 
+func TestEndToEnd_CodeTypeFilter(t *testing.T) {
+	pool := setupDB(t)
+	ctx := context.Background()
+	log := logging.Setup("text")
+
+	cfg := &config.Config{
+		DSN:             testDSN,
+		FilePath:        fixtureFile(),
+		LogFormat:       "text",
+		ActivateVersion: true,
+		KeepStaging:     true,
+		CodeTypes:       []string{"CPT", "NDC"},
+	}
+
+	summary, err := ingest.Run(ctx, pool, log, cfg)
+	if err != nil {
+		t.Fatalf("pipeline.Run: %v", err)
+	}
+
+	// Only CPT and NDC rows should be in the serving table
+	t.Run("only_filtered_code_types_present", func(t *testing.T) {
+		rows, err := pool.Query(ctx,
+			"SELECT code_type, count(*) FROM mrf.prices_by_code GROUP BY code_type ORDER BY code_type")
+		if err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		defer rows.Close()
+
+		got := make(map[string]int)
+		for rows.Next() {
+			var codeType string
+			var count int
+			if err := rows.Scan(&codeType, &count); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			got[codeType] = count
+		}
+
+		for codeType := range got {
+			if codeType != "CPT" && codeType != "NDC" {
+				t.Errorf("unexpected code_type %s with %d rows", codeType, got[codeType])
+			}
+		}
+	})
+
+	t.Run("other_code_types_zero", func(t *testing.T) {
+		for _, ct := range []string{"HCPCS", "MS-DRG", "CDT"} {
+			var count int64
+			pool.QueryRow(ctx,
+				"SELECT count(*) FROM mrf.prices_by_code WHERE code_type = $1", ct).Scan(&count)
+			if count != 0 {
+				t.Errorf("expected 0 rows for code_type %s, got %d", ct, count)
+			}
+		}
+	})
+
+	_ = summary // used for pipeline return check
+}
+
 // Ensure normalize package is used (compile check).
 var _ = normalize.NormalizeCode

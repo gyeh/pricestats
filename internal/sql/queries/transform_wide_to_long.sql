@@ -64,26 +64,14 @@ LEFT JOIN ref.plans pl
  AND pl.plan_name_norm = s.plan_name_norm
 CROSS JOIN LATERAL (
   VALUES
-    ('CPT',      s.cpt_code),
-    ('HCPCS',    s.hcpcs_code),
-    ('MS-DRG',   s.ms_drg_code),
-    ('NDC',      s.ndc_code),
-    ('RC',       s.rc_code),
-    ('ICD',      s.icd_code),
-    ('DRG',      s.drg_code),
-    ('CDM',      s.cdm_code),
-    ('LOCAL',    s.local_code),
-    ('APC',      s.apc_code),
-    ('EAPG',     s.eapg_code),
-    ('HIPPS',    s.hipps_code),
-    ('CDT',      s.cdt_code),
-    ('R-DRG',    s.r_drg_code),
-    ('S-DRG',    s.s_drg_code),
-    ('APS-DRG',  s.aps_drg_code),
-    ('AP-DRG',   s.ap_drg_code),
-    ('APR-DRG',  s.apr_drg_code),
-    ('TRIS-DRG', s.tris_drg_code)
+    ('CPT',    s.cpt_code),
+    ('HCPCS',  s.hcpcs_code),
+    ('MS-DRG', s.ms_drg_code),
+    ('NDC',    s.ndc_code),
+    ('CDT',    s.cdt_code)
 ) AS c(code_type, code_raw)
 WHERE s.ingest_batch_id = sqlc.arg(ingest_batch_id)
   AND c.code_raw IS NOT NULL
-  AND c.code_raw <> '';
+  AND c.code_raw <> ''
+  AND (sqlc.arg(code_types)::text[] IS NULL
+       OR c.code_type = ANY(sqlc.arg(code_types)::text[]));

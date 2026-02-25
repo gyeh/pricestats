@@ -68,27 +68,13 @@ type HospitalChargeRow struct {
 	Affirmation      bool    `parquet:"affirmation"`
 }
 
-// CodeValue returns a map of code_type_name -> *string for all 19 code columns.
+// CodeValues returns a map of code_type_name -> *string for the supported code columns.
 func (r *HospitalChargeRow) CodeValues() map[string]*string {
 	return map[string]*string{
-		"CPT":      r.CPTCode,
-		"HCPCS":    r.HCPCSCode,
-		"MS-DRG":   r.MSDRGCode,
-		"NDC":      r.NDCCode,
-		"RC":       r.RCCode,
-		"ICD":      r.ICDCode,
-		"DRG":      r.DRGCode,
-		"CDM":      r.CDMCode,
-		"LOCAL":    r.LOCALCode,
-		"APC":      r.APCCode,
-		"EAPG":     r.EAPGCode,
-		"HIPPS":    r.HIPPSCode,
-		"CDT":      r.CDTCode,
-		"R-DRG":    r.RDRGCode,
-		"S-DRG":    r.SDRGCode,
-		"APS-DRG":  r.APSDRGCode,
-		"AP-DRG":   r.APDRGCode,
-		"APR-DRG":  r.APRDRGCode,
-		"TRIS-DRG": r.TRISDRGCode,
+		"CPT":    r.CPTCode,
+		"HCPCS":  r.HCPCSCode,
+		"MS-DRG": r.MSDRGCode,
+		"NDC":    r.NDCCode,
+		"CDT":    r.CDTCode,
 	}
 }

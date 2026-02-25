@@ -3,6 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"github.com/gyeh/pricestats/internal/model"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Config holds all runtime configuration for a mrfload run.
@@ -15,7 +19,45 @@ type Config struct {
 	Force              bool
 	KeepStaging        bool
 	DryRun             bool
-	IncludePayerPrices bool // opt-in: include payer/plan names and negotiated price fields
+	IncludePayerPrices bool     // opt-in: include payer/plan names and negotiated price fields
+	CodeTypes          []string `yaml:"code_types"` // subset of AllCodeTypes to process
+}
+
+// yamlConfig is the on-disk YAML structure.
+type yamlConfig struct {
+	CodeTypes []string `yaml:"code_types"`
+}
+
+// LoadFromFile reads a YAML config file and merges its values into Config.
+func (c *Config) LoadFromFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config file: %w", err)
+	}
+	var yc yamlConfig
+	if err := yaml.Unmarshal(data, &yc); err != nil {
+		return fmt.Errorf("parse config file: %w", err)
+	}
+	c.CodeTypes = yc.CodeTypes
+	return c.validateCodeTypes()
+}
+
+// validateCodeTypes checks that every entry in CodeTypes is a known code type name.
+// If CodeTypes is empty, it defaults to all AllCodeTypes names.
+func (c *Config) validateCodeTypes() error {
+	if len(c.CodeTypes) == 0 {
+		c.CodeTypes = make([]string, len(model.AllCodeTypes))
+		for i, ct := range model.AllCodeTypes {
+			c.CodeTypes[i] = ct.Name
+		}
+		return nil
+	}
+	for _, name := range c.CodeTypes {
+		if _, ok := model.CodeTypeByName(name); !ok {
+			return fmt.Errorf("unknown code type %q in config", name)
+		}
+	}
+	return nil
 }
 
 // Validate checks required fields and returns an error if the config is invalid.

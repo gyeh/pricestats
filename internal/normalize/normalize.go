@@ -27,26 +27,12 @@ func ToStagingRow(row *model.HospitalChargeRow, batchID uuid.UUID, mRFFileID int
 		Setting:      optStr(row.Setting),
 		BillingClass: row.BillingClass,
 
-		// Normalize all 19 code columns
-		CPTCode:     NormalizeCode(row.CPTCode),
-		HCPCSCode:   NormalizeCode(row.HCPCSCode),
-		MSDRGCode:   NormalizeCode(row.MSDRGCode),
-		NDCCode:     NormalizeCode(row.NDCCode),
-		RCCode:      NormalizeCode(row.RCCode),
-		ICDCode:     NormalizeCode(row.ICDCode),
-		DRGCode:     NormalizeCode(row.DRGCode),
-		CDMCode:     NormalizeCode(row.CDMCode),
-		LOCALCode:   NormalizeCode(row.LOCALCode),
-		APCCode:     NormalizeCode(row.APCCode),
-		EAPGCode:    NormalizeCode(row.EAPGCode),
-		HIPPSCode:   NormalizeCode(row.HIPPSCode),
-		CDTCode:     NormalizeCode(row.CDTCode),
-		RDRGCode:    NormalizeCode(row.RDRGCode),
-		SDRGCode:    NormalizeCode(row.SDRGCode),
-		APSDRGCode:  NormalizeCode(row.APSDRGCode),
-		APDRGCode:   NormalizeCode(row.APDRGCode),
-		APRDRGCode:  NormalizeCode(row.APRDRGCode),
-		TRISDRGCode: NormalizeCode(row.TRISDRGCode),
+		// Normalize code columns
+		CPTCode:   NormalizeCode(row.CPTCode),
+		HCPCSCode: NormalizeCode(row.HCPCSCode),
+		MSDRGCode: NormalizeCode(row.MSDRGCode),
+		NDCCode:   NormalizeCode(row.NDCCode),
+		CDTCode:   NormalizeCode(row.CDTCode),
 
 		// Hospital-level charges (always included)
 		GrossChargeCents:    DollarsToCents(row.GrossCharge),
